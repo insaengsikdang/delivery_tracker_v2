@@ -1,0 +1,17 @@
+version: '1.0.0'
+
+services:
+  delivery-tracker-server:
+    build: .
+    container_name: delivery-tracker-container
+    ports:
+      - "4000:4000"
+    environment:
+      - LISTEN_PORT=4000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
