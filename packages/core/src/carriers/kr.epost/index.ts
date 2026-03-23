@@ -18,6 +18,7 @@ import { type CarrierUpstreamFetcher } from "../../carrier-upstream-fetcher/Carr
 const carrierLogger = rootLogger.child({
   carrierId: "kr.epost",
 });
+const FETCH_RETRY_DELAYS_MS = [300, 600, 1000] as const;
 
 class KoreaPost extends Carrier {
   readonly carrierId = "kr.epost";
@@ -44,7 +45,7 @@ class KoreaPostTrackScraper {
     const queryString = new URLSearchParams({
       sid1: this.trackingNumber,
     }).toString();
-    const response = await this.upstreamFetcher.fetch(
+    const response = await this.fetchTraceResponse(
       `https://service.epost.go.kr/trace.RetrieveDomRigiTraceList.comm?${queryString}`
     );
     const traceResponseHtmlText = await response.text();
@@ -72,6 +73,75 @@ class KoreaPostTrackScraper {
       ...senderAndRecipient,
       carrierSpecificData: new Map(),
     };
+  }
+
+  private async fetchTraceResponse(url: string): Promise<Response> {
+    const maxAttempts = FETCH_RETRY_DELAYS_MS.length + 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await this.upstreamFetcher.fetch(url);
+      } catch (error) {
+        if (!this.shouldRetryFetchError(error) || attempt === maxAttempts) {
+          this.logger.error("epost upstream fetch failed", {
+            attempt,
+            maxAttempts,
+            trackingNumber: this.trackingNumber,
+            causeCode: this.getFetchErrorCauseCode(error),
+            error,
+          });
+          throw error;
+        }
+
+        const retryDelayMs = FETCH_RETRY_DELAYS_MS[attempt - 1];
+        this.logger.warn("epost upstream fetch retry", {
+          attempt,
+          nextAttempt: attempt + 1,
+          maxAttempts,
+          retryDelayMs,
+          trackingNumber: this.trackingNumber,
+          causeCode: this.getFetchErrorCauseCode(error),
+          error,
+        });
+        await this.sleep(retryDelayMs);
+      }
+    }
+
+    throw new Error("unreachable");
+  }
+
+  private shouldRetryFetchError(error: unknown): boolean {
+    const message =
+      error instanceof Error ? error.message.toLowerCase() : String(error);
+    const causeCode = this.getFetchErrorCauseCode(error);
+
+    return (
+      causeCode === "ECONNRESET" ||
+      causeCode === "ETIMEDOUT" ||
+      message.includes("fetch failed")
+    );
+  }
+
+  private getFetchErrorCauseCode(error: unknown): string | null {
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      "cause" in error &&
+      error.cause !== null &&
+      typeof error.cause === "object" &&
+      "code" in error.cause &&
+      typeof error.cause.code === "string"
+    ) {
+      return error.cause.code;
+    }
+
+    return null;
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
   }
 
   private parseEvent(tr: Element): TrackEvent {
