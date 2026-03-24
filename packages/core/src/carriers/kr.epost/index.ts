@@ -1,6 +1,7 @@
 import { type Logger } from "winston";
 import {
   Carrier,
+  type CarrierInitInput,
   type CarrierTrackInput,
   type TrackInfo,
   type TrackEvent,
@@ -14,6 +15,7 @@ import { NotFoundError } from "../../core/errors";
 import { DateTime } from "luxon";
 import { JSDOM } from "jsdom";
 import { type CarrierUpstreamFetcher } from "../../carrier-upstream-fetcher/CarrierUpstreamFetcher";
+import { RetryingCarrierUpstreamFetcher } from "../../carrier-upstream-fetcher/RetryingCarrierUpstreamFetcher";
 
 const carrierLogger = rootLogger.child({
   carrierId: "kr.epost",
@@ -21,10 +23,18 @@ const carrierLogger = rootLogger.child({
 
 class KoreaPost extends Carrier {
   readonly carrierId = "kr.epost";
+  private retryingUpstreamFetcher: RetryingCarrierUpstreamFetcher | null = null;
+
+  public async init(input: CarrierInitInput): Promise<void> {
+    await super.init(input);
+    this.retryingUpstreamFetcher = new RetryingCarrierUpstreamFetcher({
+      carrier: this,
+    });
+  }
 
   public async track(input: CarrierTrackInput): Promise<TrackInfo> {
     return await new KoreaPostTrackScraper(
-      this.upstreamFetcher,
+      this.retryingUpstreamFetcher ?? this.upstreamFetcher,
       input.trackingNumber
     ).track();
   }
